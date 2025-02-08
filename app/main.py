@@ -1,15 +1,20 @@
 from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from database.models import Base, JournalEntry, Habit, User
+from app.db.models import Base, JournalEntry, Habit, User
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime, timedelta
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import openai
 from textblob import TextBlob
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import Optional, List
+from app.auth.dependencies import get_current_user
+from app.auth.security import verify_password, create_access_token, get_password_hash
 
 # Pydantic models for request/response
 class UserCreate(BaseModel):
@@ -17,7 +22,12 @@ class UserCreate(BaseModel):
     email: str
     password: str
 
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
 class JournalEntryCreate(BaseModel):
+    user_id: str
     entry_text: str
 
 class JournalEntryResponse(BaseModel):
@@ -28,13 +38,41 @@ class JournalEntryResponse(BaseModel):
     ai_reflection: Optional[str]
     created_at: datetime
 
-class HabitCreate(BaseModel):
+class HabitResponse(BaseModel):
+    id: int
     habit_name: str
     frequency: str
+    streak: int
+    last_logged: datetime
+    created_at: datetime
+
+class CheckInResponse(BaseModel):
+    id: int
+    mood: int
+    energy: int
+    stress: int
+    notes: Optional[str]
+    created_at: datetime
+
+class HabitCreate(BaseModel):
+    user_id: str
+    habit_name: str
+
+class CheckInCreate(BaseModel):
+    user_id: str
+    mood: int
+    energy: int
+    stress: int
+    notes: Optional[str] = None
+
+class JournalAnalyze(BaseModel):
+    user_id: str
+    entry_text: str
 
 # Load environment variables
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://jamesguy@localhost/mindmirror")
+DATABASE_URL = "postgresql://jamesguy@localhost/mindmirror"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ACCESS_TOKEN_EXPIRE_MINUTES = 30  # Token expiration time
 
 # Database setup
 engine = create_engine(DATABASE_URL)
@@ -46,10 +84,11 @@ app = FastAPI(title="Mind Mirror API", description="AI-powered self-reflection &
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 # Dependency Injection
@@ -65,26 +104,78 @@ def get_db():
 def read_root():
     return {"message": "Welcome to Mind Mirror API"}
 
-@app.post("/users/", response_model=dict)
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.username == user.username).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="Username already registered")
-    
-    # In a real app, hash the password here
-    new_user = User(
-        username=user.username,
-        email=user.email,
-        hashed_password=user.password  # Don't do this in production!
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    return {"message": "User created successfully", "user_id": new_user.id}
+@app.post("/auth/register", response_model=dict)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    try:
+        # Check for existing username
+        db_user = db.query(User).filter(User.username == user.username).first()
+        if db_user:
+            raise HTTPException(status_code=400, detail="Username already registered")
+            
+        # Check for existing email
+        db_user = db.query(User).filter(User.email == user.email).first()
+        if db_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create new user
+        db_user = User(
+            username=user.username,
+            email=user.email,
+            hashed_password=get_password_hash(user.password)
+        )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        
+        # Generate access token
+        access_token = create_access_token(
+            data={"sub": user.username},
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+        return {"access_token": access_token, "token_type": "bearer"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/auth/login", response_model=dict)
+def login(user: UserLogin, db: Session = Depends(get_db)):
+    try:
+        print(f"Login attempt for email: {user.email}")  # Debug log
+        db_user = db.query(User).filter(User.email == user.email).first()
+        print(f"User found: {db_user is not None}")  # Debug log
+        
+        if not db_user:
+            print("User not found")  # Debug log
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        print("Verifying password...")  # Debug log
+        if not verify_password(user.password, db_user.hashed_password):
+            print("Password verification failed")  # Debug log
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        print("Creating access token...")  # Debug log
+        access_token = create_access_token(
+            data={"sub": db_user.username},
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+        print("Access token created successfully")  # Debug log
+        
+        return {"access_token": access_token, "token_type": "bearer"}
+    except Exception as e:
+        print(f"Login error: {str(e)}")  # Debug log
+        raise
 
 @app.post("/journal/", response_model=JournalEntryResponse)
-def add_journal_entry(entry: JournalEntryCreate, user_id: int, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == user_id).first()
+def add_journal_entry(entry: JournalEntryCreate, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == entry.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -93,7 +184,7 @@ def add_journal_entry(entry: JournalEntryCreate, user_id: int, db: Session = Dep
     mood = "Positive" if sentiment > 0 else "Negative" if sentiment < 0 else "Neutral"
 
     journal_entry = JournalEntry(
-        user_id=user.id,
+        user_id=entry.user_id,
         entry_text=entry.entry_text,
         sentiment_score=sentiment,
         mood=mood
@@ -114,15 +205,15 @@ def get_journal_entries(user_id: int, db: Session = Depends(get_db)):
     return entries
 
 @app.post("/habits/")
-def track_habit(habit: HabitCreate, user_id: int, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == user_id).first()
+def track_habit(habit: HabitCreate, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == habit.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     habit_entry = Habit(
-        user_id=user.id,
+        user_id=habit.user_id,
         habit_name=habit.habit_name,
-        frequency=habit.frequency,
+        frequency="daily",
         last_logged=datetime.utcnow()
     )
     db.add(habit_entry)
@@ -130,7 +221,7 @@ def track_habit(habit: HabitCreate, user_id: int, db: Session = Depends(get_db))
     return {"message": f"Habit '{habit.habit_name}' logged successfully."}
 
 @app.post("/journal/analyze/")
-def analyze_journal_entry(entry: JournalEntryCreate, user_id: int, db: Session = Depends(get_db)):
+def analyze_journal_entry(entry: JournalAnalyze, db: Session = Depends(get_db)):
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
     
@@ -141,19 +232,19 @@ def analyze_journal_entry(entry: JournalEntryCreate, user_id: int, db: Session =
         model="gpt-4-turbo",
         messages=[
             {"role": "system", "content": "You are an AI mentor helping users reflect on their thoughts."},
-            {"role": "user", "content": f"Here is my journal entry: {entry_text}. Can you give me feedback?"}
+            {"role": "user", "content": f"Here is my journal entry: {entry.entry_text}. Can you give me feedback?"}
         ]
     )
 
     ai_feedback = response.choices[0].message.content
 
     # Save to DB with sentiment analysis
-    sentiment = TextBlob(entry_text).sentiment.polarity
+    sentiment = TextBlob(entry.entry_text).sentiment.polarity
     mood = "Positive" if sentiment > 0 else "Negative" if sentiment < 0 else "Neutral"
     
     journal_entry = JournalEntry(
-        user_id=user_id,
-        entry_text=entry_text,
+        user_id=entry.user_id,
+        entry_text=entry.entry_text,
         sentiment_score=sentiment,
         mood=mood,
         ai_reflection=ai_feedback
@@ -163,52 +254,15 @@ def analyze_journal_entry(entry: JournalEntryCreate, user_id: int, db: Session =
 
     return {"message": "Journal entry analyzed!", "feedback": ai_feedback, "mood": mood}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
-# CORS configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Add authentication router
-app.include_router(auth_router, prefix="/auth", tags=["authentication"])
-
-# Security setup
-API_KEY_NAME = "X-API-KEY"
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
-
-async def get_api_key(api_key: str = Security(api_key_header)):
-    if api_key != settings.app_secret:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid API Key"
-        )
-    return api_key
-
-@app.post("/journal-entries/", response_model=JournalEntryResponse)
-async def create_journal_entry(
-    entry_data: JournalEntryCreate,
-    current_user: str = Depends(get_current_user)
-) -> JournalEntryResponse:
-    """Create a new journal entry with AI-powered reflection."""
+async def new_async_block(entry_data, current_user):
     try:
-        # Get AI analysis
         reflection = await generate_ai_reflection(entry_data.entry_text)
-        
-        # Create journal entry
         journal_entry = {
             "user_id": current_user,
             "entry_text": entry_data.entry_text,
             "ai_insights": reflection,
             "created_at": datetime.utcnow()
         }
-        
         return JournalEntryResponse(**journal_entry)
     except Exception as e:
         logger.error(f"Error creating journal entry: {str(e)}")
@@ -398,6 +452,30 @@ async def get_check_ins(
         logger.error(f"Error fetching check-ins: {str(e)}")
         raise handle_database_error(e)
 
+# Custom Exceptions and Error Handlers
+class APIError(Exception):
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.detail = detail
+
+def handle_validation_error(exc):
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
+    )
+
+def handle_api_error(exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
+def handle_database_error(exc):
+    return APIError(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"Database error: {str(exc)}"
+    )
+
 # Error handlers
 @app.exception_handler(ValidationError)
 async def validation_exception_handler(request, exc):
@@ -406,6 +484,14 @@ async def validation_exception_handler(request, exc):
 @app.exception_handler(APIError)
 async def api_error_handler(request, exc):
     return handle_api_error(exc)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers={"Access-Control-Allow-Origin": "http://localhost:3000"}
+    )
 
 async def generate_ai_reflection(text: str) -> dict:
     openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
