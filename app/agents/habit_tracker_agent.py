@@ -1,4 +1,4 @@
-from agency_swarm.tools import BaseTool
+from .base_agent import BaseAgent
 from pydantic import Field, BaseModel
 from typing import List, Dict, Optional
 import datetime
@@ -26,7 +26,7 @@ class Habit(BaseModel):
     created_at: str
     last_logged: str
 
-class HabitTrackerAgent(BaseTool):
+class HabitTrackerAgent(BaseAgent):
     """
     Advanced habit and goal tracking agent that provides insights,
     motivational feedback, and adaptive recommendations.
@@ -97,10 +97,13 @@ class HabitTrackerAgent(BaseTool):
         
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[{"role": "system", "content": prompt}],
-                max_tokens=100,
-                temperature=0.7
+                model="o3-mini",
+                messages=[
+                    {"role": "developer", "content": "You are a motivational coach focused on habit building and personal growth."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                reasoning_effort="medium"  # Balanced approach for motivation
             )
             
             return response.choices[0].message.content.strip()

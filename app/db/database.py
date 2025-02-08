@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Get database URL from environment variables
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/mindmirror")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://jamesguy@localhost/mindmirror")
 
 # Create SQLAlchemy engine
 engine = create_engine(DATABASE_URL)

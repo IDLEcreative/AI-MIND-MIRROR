@@ -1,4 +1,4 @@
-from agency_swarm.tools import BaseTool
+from pydantic import BaseModel, Field
 from pydantic import Field, BaseModel
 from typing import List, Dict, Optional
 from openai import OpenAI
@@ -19,7 +19,7 @@ class WellBeingMetrics(BaseModel):
     social_connection: Optional[int]  # 1-10
     notes: Optional[str]
 
-class CheckInAgent(BaseTool):
+class CheckInAgent(BaseModel):
     """
     Advanced AI agent for conducting comprehensive mental well-being check-ins
     and providing personalized self-care recommendations.
@@ -89,9 +89,13 @@ class CheckInAgent(BaseTool):
         
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[{"role": "system", "content": prompt}],
-                temperature=0.7
+                model="o3-mini",
+                messages=[
+                    {"role": "developer", "content": "You are an empathetic well-being coach specializing in mental health analysis and personalized care recommendations."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                reasoning_effort="high"  # Deep analysis for well-being insights
             )
             
             return json.loads(response.choices[0].message.content)

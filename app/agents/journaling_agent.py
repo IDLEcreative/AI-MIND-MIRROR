@@ -1,4 +1,4 @@
-from agency_swarm.tools import BaseTool
+from .base_agent import BaseAgent
 from pydantic import Field
 from textblob import TextBlob
 from openai import OpenAI
@@ -10,7 +10,7 @@ import datetime
 # Load environment variables
 load_dotenv()
 
-class JournalingAgent(BaseTool):
+class JournalingAgent(BaseAgent):
     """
     AI journaling assistant that analyzes user entries, extracts themes, and tracks moods.
     Provides deep insights into emotional patterns and recurring themes.
@@ -65,10 +65,13 @@ class JournalingAgent(BaseTool):
         
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[{"role": "system", "content": prompt}],
-                max_tokens=100,
-                temperature=0.3
+                model="o3-mini",
+                messages=[
+                    {"role": "developer", "content": "You are an insightful journaling assistant that helps identify themes and patterns in personal writing."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                reasoning_effort="high"  # Deep analysis for theme extraction
             )
             
             themes = [theme.strip() for theme in response.choices[0].message.content.split(",")]
@@ -101,10 +104,13 @@ class JournalingAgent(BaseTool):
         
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[{"role": "system", "content": prompt}],
-                max_tokens=150,
-                temperature=0.7
+                model="o3-mini",
+                messages=[
+                    {"role": "developer", "content": "You are an empathetic journaling coach that provides gentle, insightful feedback."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                reasoning_effort="medium"  # Balanced approach for generating insights
             )
             
             return response.choices[0].message.content.strip()

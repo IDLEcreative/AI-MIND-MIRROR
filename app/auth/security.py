@@ -1,21 +1,23 @@
-from passlib.context import CryptContext
+import bcrypt
 from datetime import datetime, timedelta
 from typing import Union, Any
 from jose import jwt
 import os
-
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "default-secret-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode(), salt).decode()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
+    except Exception as e:
+        print(f"Password verification error: {e}")
+        return False
 
 def create_access_token(
     data: dict, expires_delta: Union[timedelta, None] = None

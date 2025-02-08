@@ -70,13 +70,23 @@ class JournalAnalyze(BaseModel):
     entry_text: str
 
 # Load environment variables
-DATABASE_URL = "postgresql://jamesguy@localhost/mindmirror"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ACCESS_TOKEN_EXPIRE_MINUTES = 30  # Token expiration time
 
-# Database setup
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Create FastAPI app
+app = FastAPI()
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # React app URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Use database setup from app.db.database
+from app.db.database import SessionLocal
 
 # Initialize FastAPI
 app = FastAPI(title="Mind Mirror API", description="AI-powered self-reflection & personal growth")
@@ -514,6 +524,14 @@ async def generate_ai_reflection(text: str) -> dict:
     )
     
     return json.loads(response.choices[0].message.content)
+
+@app.get("/users/me")
+def get_current_user_profile(current_user: User = Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email
+    }
 
 if __name__ == "__main__":
     import uvicorn

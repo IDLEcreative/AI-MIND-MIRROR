@@ -1,4 +1,4 @@
-from agency_swarm.tools import BaseTool
+from .base_agent import BaseAgent
 from pydantic import Field, BaseModel
 from typing import List, Dict, Optional
 from openai import OpenAI
@@ -18,7 +18,7 @@ class ReflectionInsights(BaseModel):
     reframing_suggestions: Optional[List[str]]
     summary: str
 
-class ReflectionAgent(BaseTool):
+class ReflectionAgent(BaseAgent):
     """
     The AI Mirror agent that engages users in deep self-reflection.
     It uses structured questioning and cognitive bias detection to encourage introspection.
@@ -57,9 +57,13 @@ class ReflectionAgent(BaseTool):
         
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[{"role": "system", "content": prompt}],
-                temperature=0.3
+                model="o3-mini",
+                messages=[
+                    {"role": "developer", "content": "You are an expert in cognitive psychology, specializing in identifying cognitive biases and thought patterns."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                reasoning_effort="high"  # Deep analysis for cognitive bias detection
             )
             
             biases = response.choices[0].message.content.split(",")
@@ -87,9 +91,13 @@ class ReflectionAgent(BaseTool):
         
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[{"role": "system", "content": prompt}],
-                temperature=0.3
+                model="o3-mini",
+                messages=[
+                    {"role": "developer", "content": "You are an expert in cognitive psychology, specializing in identifying cognitive biases and thought patterns."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                reasoning_effort="high"  # Deep analysis for cognitive bias detection
             )
             
             return json.loads(response.choices[0].message.content)
